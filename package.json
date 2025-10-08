@@ -1,0 +1,23 @@
+{
+  "name": "islive",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/fs-extra": "11.0.4",
+    "@types/node-telegram-bot-api": "0.64.11"
+  },
+  "scripts": {
+    "dev": "bun run index.ts",
+    "build": "bun build index.ts --outfile bot/run.js --target bun --minify"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "fs-extra": "^11.3.2",
+    "node-telegram-bot-api": "0.66.0"
+  }
+}
