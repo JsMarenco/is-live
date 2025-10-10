@@ -28,6 +28,25 @@ interface TokensDB {
   [address: string]: StoredToken;
 }
 
+interface BotCommand {
+  name: string;
+  description: string;
+  example: string;
+}
+
+const commands: BotCommand[] = [
+  {
+    name: "/notify",
+    description: "Subscribe to be notified when a Pump.fun token goes live.",
+    example: "/notify <token_address>pump",
+  },
+  {
+    name: "/menu",
+    description: "Show all available commands.",
+    example: "/menu",
+  },
+];
+
 /**
  * Retrieves token information from Pump.fun API by its address.
  * @param tokenAddress - The address of the token.
@@ -141,7 +160,6 @@ const dispatchLiveTokenNotifications = async (): Promise<void> => {
 
     const nowLive: boolean = tokenInfo.is_currently_live ?? false;
 
-    // Safe check to prevent undefined field access
     if (tokenData && nowLive === true && tokenData.hasNotified !== true) {
       for (const chat of tokenData.chats ?? []) {
         if (!chat?.id) continue;
@@ -149,7 +167,7 @@ const dispatchLiveTokenNotifications = async (): Promise<void> => {
         const message =
           `Good news, ${chat.first_name || chat.username || "user"},\n\n` +
           `Your token ${tokenData.tokenName ?? "Unknown"} (${tokenData.tokenSymbol ?? "-"}) $IsLive.\n\n` +
-          `View token: https://pump.fun/${tokenData.tokenAddress}`;
+          `View token: https://pump.fun/coin/${tokenData.tokenAddress}`;
 
         await bot.sendMessage(chat.id, message);
       }
@@ -160,11 +178,60 @@ const dispatchLiveTokenNotifications = async (): Promise<void> => {
   }
 };
 
+bot.onText(/\/menu/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  const keyboard = {
+    inline_keyboard: commands.map((cmd) => [
+      { text: `${cmd.name} - ${cmd.description}`, callback_data: cmd.name },
+    ]),
+  };
+
+  await bot.sendMessage(chatId, "Available commands:", {
+    reply_markup: keyboard,
+  });
+});
+
+bot.on("callback_query", async (query) => {
+  const chatId = query.message?.chat.id;
+  const command = query.data;
+
+  if (!chatId || !command) return;
+
+  switch (command) {
+    case "/notify":
+      await bot.sendMessage(
+        chatId,
+        "To subscribe for live token alerts, send the following command:\n\nExample:\n`/notify <token_address>pump`",
+        { parse_mode: "Markdown" }
+      );
+      break;
+
+    case "/menu":
+      await bot.sendMessage(chatId, "You are already viewing the menu.");
+      break;
+
+    default:
+      await bot.sendMessage(chatId, "Command not recognized.");
+      break;
+  }
+
+  await bot.answerCallbackQuery(query.id);
+});
+
+/**
+ * Interval configuration for live token checks (in minutes).
+ * You can adjust this value as needed.
+ */
+const LIVE_CHECK_INTERVAL_MINUTES = 1;
+
 /**
  * Initializes the periodic check for live tokens.
  */
 const initializeLiveCheck = (): void => {
-  setInterval(dispatchLiveTokenNotifications, 60 * 1000);
+  const intervalMs = LIVE_CHECK_INTERVAL_MINUTES * 60 * 1000;
+
+  setInterval(dispatchLiveTokenNotifications, intervalMs);
   dispatchLiveTokenNotifications();
 };
 
