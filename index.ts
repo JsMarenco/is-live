@@ -48,6 +48,25 @@ const commands: BotCommand[] = [
 ];
 
 /**
+ * Logs token registration or user notification events.
+ * @param {Object} props - The input props.
+ * @param {boolean} props.isNew - True if a new token was added.
+ * @param {TokenChat} props.user - The user related to the event.
+ * @param {StoredToken} props.token - The token object.
+ * @param {string} props.message - The message to log.
+ */
+const logTokenActivity = ({ isNew, token }: {
+  isNew: boolean,
+  token: StoredToken
+}) => {
+  const time = `[${new Date().toLocaleString()}]`
+  const tokenAddress = token.tokenAddress.length > 40 ? token.tokenAddress.slice(0, 40) + '...' : token.tokenAddress
+  const chatCount = token.chats.length
+  const action = isNew ? 'New token added' : 'User subscribed for notifications'
+  console.log(`${time} ${action}: ${tokenAddress} | ${chatCount} user(s)`)
+}
+
+/**
  * Retrieves token information from Pump.fun API by its address.
  * @param tokenAddress - The address of the token.
  * @returns The token data object or null if unavailable.
@@ -132,7 +151,11 @@ const handleSubscriptionCommand = async (msg: Message): Promise<void> => {
     }
   }
 
+  if (!storedTokens[tokenAddress]) return
+
   await saveTokensToFile(storedTokens);
+
+  logTokenActivity({ isNew: existing ? true : false, token: storedTokens[tokenAddress] })
 
   await bot.sendMessage(
     chatId,
