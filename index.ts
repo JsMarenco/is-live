@@ -1,263 +1,237 @@
-import TelegramBot, { type Message } from "node-telegram-bot-api";
-import fs from "fs-extra";
-import path from "path";
-import axios from "axios";
+require('dotenv').config();
+const path = require('path');
+const TelegramBot = require('node-telegram-bot-api');
+const Database = require('better-sqlite3');
+const { io } = require('socket.io-client');
 
-const token = process.env.TELEGRAM_TOKEN_BOT as string;
-const bot = new TelegramBot(token, { polling: true });
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const SOCKET_URL = process.env.SOCKET_URL;
+const SOCKET_API_KEY = process.env.SOCKET_API_KEY 
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'subscriptions.db');
 
-const TOKENS_DIR = path.join(process.cwd(), "tokens");
-const TOKENS_FILE = path.join(TOKENS_DIR, "db.json");
-
-interface TokenChat {
-  id: number;
-  username?: string;
-  first_name?: string;
+if (!TELEGRAM_BOT_TOKEN) {
+    console.error('Missing TELEGRAM_BOT_TOKEN environment variable.');
+    process.exit(1);
 }
 
-interface StoredToken {
-  tokenAddress: string;
-  tokenName: string;
-  tokenSymbol: string;
-  chats: TokenChat[];
-  isCurrentlyLive: boolean;
-  hasNotified: boolean;
-}
+const db = new Database(DB_PATH);
+db.prepare(
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        token_address TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, token_address),
+        market_cap_usd REAL DEFAULT 0
+    )`
+).run();
 
-interface TokensDB {
-  [address: string]: StoredToken;
-}
+db.prepare(
+    `CREATE TABLE IF NOT EXISTS pinned_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        token_address TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, token_address)
+    )`
+).run();
 
-interface BotCommand {
-  name: string;
-  description: string;
-  example: string;
-}
+const insertSubscription = db.prepare(
+    'INSERT OR IGNORE INTO subscriptions (chat_id, token_address) VALUES (?, ?)' 
+);
+const findChatsByToken = db.prepare(
+    'SELECT DISTINCT chat_id FROM subscriptions WHERE token_address = ?'
+);
+const findTokensByChat = db.prepare(
+    'SELECT token_address FROM subscriptions WHERE chat_id = ? ORDER BY created_at DESC'
+);
+const upsertPinnedMessage = db.prepare(
+    `INSERT INTO pinned_messages (chat_id, token_address, message_id)
+     VALUES (?, ?, ?)
+     ON CONFLICT(chat_id, token_address)
+     DO UPDATE SET message_id = excluded.message_id`
+);
+const findPinnedMessagesByToken = db.prepare(
+    'SELECT chat_id, message_id FROM pinned_messages WHERE token_address = ?'
+);
+const deletePinnedMessage = db.prepare(
+    'DELETE FROM pinned_messages WHERE chat_id = ? AND token_address = ?'
+);
 
-const commands: BotCommand[] = [
-  {
-    name: "/notify",
-    description: "Subscribe to be notified when a Pump.fun token goes live.",
-    example: "/notify <token_address>pump",
-  },
-  {
-    name: "/menu",
-    description: "Show all available commands.",
-    example: "/menu",
-  },
-];
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
-/**
- * Logs token registration or user notification events.
- * @param {Object} props - The input props.
- * @param {boolean} props.isNew - True if a new token was added.
- * @param {TokenChat} props.user - The user related to the event.
- * @param {StoredToken} props.token - The token object.
- * @param {string} props.message - The message to log.
- */
-const logTokenActivity = ({ isNew, token }: {
-  isNew: boolean,
-  token: StoredToken
-}) => {
-  const time = `[${new Date().toLocaleString()}]`
-  const tokenAddress = token.tokenAddress.length > 40 ? token.tokenAddress.slice(0, 40) + '...' : token.tokenAddress
-  const chatCount = token.chats.length
-  const action = isNew ? 'New token added' : 'User subscribed for notifications'
-  console.log(`${time} ${action}: ${tokenAddress} | ${chatCount} user(s)`)
-}
+const normalizeMint = (raw) => raw.replace(/\s+/g, '').trim();
+const isValidMint = (mint) => /^[1-9A-HJ-NP-Za-km-z]{32,}$/.test(mint);
 
-/**
- * Retrieves token information from Pump.fun API by its address.
- * @param tokenAddress - The address of the token.
- * @returns The token data object or null if unavailable.
- */
-const fetchTokenDetails = async (
-  tokenAddress: string
-): Promise<any | null> => {
-  const url = `https://frontend-api-v3.pump.fun/coins/${tokenAddress}`;
-  try {
-    const response = await axios.get(url);
-    return response.data;
-  } catch (error: any) {
-    console.error("Failed to fetch token details:", error.message);
-    return null;
-  }
+const formatStreamLabel = (stream) => {
+    const label = stream.name || stream.symbol || 'Unnamed token';
+    return `${label}`;
 };
 
-/**
- * Loads the list of saved tokens from local storage.
- * @returns The stored token data object.
- */
-const loadSavedTokens = async (): Promise<TokensDB> => {
-  await fs.ensureDir(TOKENS_DIR);
-  const exists = await fs.pathExists(TOKENS_FILE);
-  return exists ? await fs.readJson(TOKENS_FILE) : {};
+const formatLiveMessage = (stream) => {
+    const title = stream.livestream_title ? `\n\n🎬 ${stream.livestream_title}` : '';
+    const viewers = typeof stream.viewers === 'number' ? `\n👀 Viewers: ${stream.viewers} \n💰Market Cap: ${stream.market_cap_usd}\n👤Holders: ${stream.holders}`  : '';
+    return `🟢 ${formatStreamLabel(stream)} is LIVE!${title}${viewers}🚀`;
 };
 
-/**
- * Persists the given token data to local storage.
- * @param data - The token data object to be saved.
- */
-const saveTokensToFile = async (data: TokensDB): Promise<void> => {
-  await fs.writeJson(TOKENS_FILE, data, { spaces: 2 });
-};
+const fetchCoinData = async (mint) => {
+    try {
+        const response = await fetch(`https://data.pumpmod.live/coin/${mint}`);
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Failed to fetch coin data:', error);
+        return null;
+    }
+}
 
-/**
- * Registers a user's interest in a specific token and stores it locally.
- * @param msg - The Telegram message object containing the user's input.
- */
-const handleSubscriptionCommand = async (msg: Message): Promise<void> => {
-  if (!msg.text?.includes("/notify")) return;
+const formatOfflineMessage = (stream) => `🔴 ${formatStreamLabel(stream)} went offline.`;
 
-  const chatId = msg.chat.id;
-  const args = msg.text.split("/notify");
-  const tokenAddress = args[1]?.trim();
+const subscribeToToken = async (chatId, tokenAddress) => {
+    const normalized = normalizeMint(tokenAddress);
 
-  if (!tokenAddress || !tokenAddress.endsWith("pump")) {
-    await bot.sendMessage(
-      chatId,
-      "Invalid token address format. Please send a valid Pump token address."
-    );
-    return;
-  }
+    if (!isValidMint(normalized)) {
+        return { ok: false, message: 'Please provide a valid Solana token address.' };
+    }
 
-  const storedTokens = await loadSavedTokens();
-  const existing = storedTokens[tokenAddress];
-  const tokenInfo = await fetchTokenDetails(tokenAddress);
-
-  if (!tokenInfo) {
-    await bot.sendMessage(
-      chatId,
-      "Could not fetch token information. Please try again later."
-    );
-    return;
-  }
-
-  const isCurrentlyLive = tokenInfo.is_currently_live;
-
-  if (!existing) {
-    storedTokens[tokenAddress] = {
-      tokenAddress,
-      tokenName: tokenInfo.name,
-      tokenSymbol: tokenInfo.symbol,
-      chats: [msg.chat as TokenChat],
-      isCurrentlyLive,
-      hasNotified: false,
+    const result = insertSubscription.run(String(chatId), normalized);
+    if (result.changes === 0) {
+        return { ok: true, message: 'You are already subscribed to this token.' };
+    }
+    const coinData = await fetchCoinData(tokenAddress);
+    return {
+        ok: true,
+        message: `Subscribed! You will be notified when ${coinData?.name || normalized} goes live or offline.`,
     };
-  } else {
-    const alreadySubscribed = existing.chats.some((c) => c.id === chatId);
-    if (!alreadySubscribed) {
-      existing.chats.push(msg.chat as TokenChat);
-    }
-  }
-
-  if (!storedTokens[tokenAddress]) return
-
-  await saveTokensToFile(storedTokens);
-
-  logTokenActivity({ isNew: existing ? true : false, token: storedTokens[tokenAddress] })
-
-  await bot.sendMessage(
-    chatId,
-    `Hello ${msg.chat.first_name || "user"}, you will be notified when ${tokenInfo.name} (${tokenInfo.symbol}) goes live.`
-  );
 };
 
-/**
- * Sends notifications to subscribed users when their tokens go live.
- */
-/**
- * Sends notifications to subscribed users when their tokens go live.
- * Handles undefined values safely to prevent runtime errors.
- */
-const dispatchLiveTokenNotifications = async (): Promise<void> => {
-  const storedTokens = await loadSavedTokens();
-  const tokenAddresses = Object.keys(storedTokens);
-
-  for (const address of tokenAddresses) {
-    const tokenData = storedTokens[address];
-    if (!tokenData) continue;
-
-    const tokenInfo = await fetchTokenDetails(address);
-    if (!tokenInfo) continue;
-
-    const nowLive: boolean = tokenInfo.is_currently_live ?? false;
-
-    if (tokenData && nowLive === true && tokenData.hasNotified !== true) {
-      for (const chat of tokenData.chats ?? []) {
-        if (!chat?.id) continue;
-
-        const message =
-          `Good news, ${chat.first_name || chat.username || "user"},\n\n` +
-          `Your token ${tokenData.tokenName ?? "Unknown"} (${tokenData.tokenSymbol ?? "-"}) $IsLive.\n\n` +
-          `View token: https://pump.fun/coin/${tokenData.tokenAddress}`;
-
-        await bot.sendMessage(chat.id, message);
-      }
-
-      tokenData.hasNotified = true;
-      await saveTokensToFile(storedTokens);
+const listSubscriptionsForChat = (chatId) => {
+    const rows = findTokensByChat.all(String(chatId));
+    if (!rows.length) {
+        return 'You have no subscriptions yet. Use /setup <tokenAddress> to add one.';
     }
-  }
+
+    const lines = rows.map((row, index) => `${index + 1}. ${row.name || row.token_address}`);
+    return `Your subscriptions:\n${lines.join('\n')}`;
 };
 
-bot.onText(/\/menu/, async (msg) => {
-  const chatId = msg.chat.id;
-
-  const keyboard = {
-    inline_keyboard: commands.map((cmd) => [
-      { text: `${cmd.name} - ${cmd.description}`, callback_data: cmd.name },
-    ]),
-  };
-
-  await bot.sendMessage(chatId, "Available commands:", {
-    reply_markup: keyboard,
-  });
+const buildPumpFunButton = (mint) => ({
+    reply_markup: {
+        inline_keyboard: [[{ text: 'Open on Pumpfun', url: `https://pump.fun/coin/${mint}` }]],
+    },
 });
 
-bot.on("callback_query", async (query) => {
-  const chatId = query.message?.chat.id;
-  const command = query.data;
-
-  if (!chatId || !command) return;
-
-  switch (command) {
-    case "/notify":
-      await bot.sendMessage(
-        chatId,
-        "To subscribe for live token alerts, send the following command:\n\nExample:\n`/notify <token_address>pump`",
-        { parse_mode: "Markdown" }
-      );
-      break;
-
-    case "/menu":
-      await bot.sendMessage(chatId, "You are already viewing the menu.");
-      break;
-
-    default:
-      await bot.sendMessage(chatId, "Command not recognized.");
-      break;
-  }
-
-  await bot.answerCallbackQuery(query.id);
-});
-
-/**
- * Interval configuration for live token checks (in minutes).
- * You can adjust this value as needed.
- */
-const LIVE_CHECK_INTERVAL_MINUTES = 1;
-
-/**
- * Initializes the periodic check for live tokens.
- */
-const initializeLiveCheck = (): void => {
-  const intervalMs = LIVE_CHECK_INTERVAL_MINUTES * 60 * 1000;
-
-  setInterval(dispatchLiveTokenNotifications, intervalMs);
-  dispatchLiveTokenNotifications();
+const sendMessageBatch = async (chatRows, text, options) => {
+    const sendPromises = chatRows.map((row) =>
+        bot.sendMessage(row.chat_id, text, options).catch((error) => {
+            console.warn(`Failed to send message to chat ${row.chat_id}`, error.message);
+        })
+    );
+    await Promise.all(sendPromises);
 };
 
-bot.on("message", handleSubscriptionCommand);
+const notifyChatsStreamLive = async (chats, stream) => {
+    const options = buildPumpFunButton(stream.mint);
+    for (const row of chats) {
+        try {
+            const sentMessage = await bot.sendMessage(row.chat_id, formatLiveMessage(stream), options);
+            await bot.pinChatMessage(row.chat_id, sentMessage.message_id, { disable_notification: true });
+            upsertPinnedMessage.run(row.chat_id, stream.mint, sentMessage.message_id);
+        } catch (error) {
+            console.warn(`Failed to notify or pin chat ${row.chat_id}`, error.message);
+        }
+    }
+};
 
-initializeLiveCheck();
+const unpinChatsForToken = async (tokenAddress) => {
+    const pinnedRows = findPinnedMessagesByToken.all(tokenAddress);
+    if (!pinnedRows.length) {
+        return;
+    }
+
+    const operations = pinnedRows.map(async (row) => {
+        try {
+            await bot.unpinChatMessage(row.chat_id, row.message_id);
+        } catch (error) {
+            console.warn(`Failed to unpin message ${row.message_id} in chat ${row.chat_id}`, error.message);
+        } finally {
+            deletePinnedMessage.run(row.chat_id, tokenAddress);
+        }
+    });
+
+    await Promise.all(operations);
+};
+
+bot.onText(/^\/setup(?:@[\w_]+)?\s+(\S+)/i, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const tokenAddress = match?.[1] || '';
+    const response = await subscribeToToken(chatId, tokenAddress);
+    bot.sendMessage(chatId, response.message);
+});
+
+// bot.onText(/^\/list(?:@[\w_]+)?$/, (msg) => {
+//     const chatId = msg.chat.id;
+//     bot.sendMessage(chatId, listSubscriptionsForChat(chatId));
+// });
+
+// bot.onText(/^\/help(?:@[\w_]+)?$/, (msg) => {
+//     const helpText =
+//         'PumpMod Livestream Bot commands:\n' +
+//         '/setup <tokenAddress> - Subscribe to a token\n' 
+//         // '/list - Show your current subscriptions';
+//     bot.sendMessage(msg.chat.id, helpText);
+// });
+
+const socket = io(SOCKET_URL, {
+    transports: ['websocket'],
+    reconnectionDelayMax: 10000,
+    auth: SOCKET_API_KEY ? { apiKey: SOCKET_API_KEY } : undefined,
+});
+
+socket.on('connect', () => {
+    console.log('Connected to websocket', socket.id);
+});
+
+socket.on('connect_error', (error) => {
+    console.warn('Websocket connection failed', error.message);
+});
+
+socket.on('disconnect', (reason) => {
+    console.warn('Disconnected from websocket', reason);
+});
+
+socket.on('nowLive', async (stream) => {
+    if (!stream?.mint) {
+        return;
+    }
+    const chats = findChatsByToken.all(stream.mint);
+    if (!chats.length) {
+        return;
+    }
+    await notifyChatsStreamLive(chats, stream);
+});
+
+
+socket.on('streamOffline', async (stream) => {
+    if (!stream?.mint) {
+        return;
+    }
+    const chats = findChatsByToken.all(stream.mint);
+    if (!chats.length) {
+        return;
+    }
+    await unpinChatsForToken(stream.mint);
+    await sendMessageBatch(chats, formatOfflineMessage(stream));
+});
+
+process.on('SIGINT', () => {
+    console.log('Shutting down bot...');
+    socket.close();
+    bot.stopPolling();
+    db.close();
+    process.exit(0);
+});
