@@ -26,7 +26,6 @@ db.prepare(
     )`
 ).run();
 
-
 db.prepare(
     `CREATE TABLE IF NOT EXISTS pinned_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

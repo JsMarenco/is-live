@@ -1,100 +1,57 @@
-<p align="center">
-  <strong>$IsLive</strong>
-  <img src="https://is-live.uk/logo.png" alt="$IsLive Token" width="400">
-  <br>
-</p>
+# $ITSLIVE
 
-# $Islive
-
-$ISLIVE keeps you updated on PumpFun livestreams. Add a coin and receive Telegram notifications the moment it goes live (Discord and Slack coming soon).
+A Telegram bot that provides real-time notifications for PumpFun livestreams and market cap updates.
 
 ## Features
 
-- Subscribe to token notifications using a command
-- Fetch token details from the Pump.fun API
-- Store subscriptions locally in a JSON file
-- Automatically notify users when a token goes live
-- Handles multiple users and tokens
+- Subscribe to specific tokens to receive alerts when they go live.
+- Real-time updates using Websockets.
+- Automatic pinning of live stream messages in Telegram chats.
+- Market cap tracking and alerts based on thresholds or absolute amounts.
+- SQLite database for storing subscriptions and alerts.
+- Unpins messages automatically when a stream goes offline.
 
-## Requirements
+## Prerequisites
 
-- Node.js (v18 or later)
-- A Telegram Bot Token from [BotFather](https://t.me/BotFather)
-- Bun
+- Node.js
+- A Telegram Bot Token
+- A Socket URL and API Key for the data source
 
 ## Installation
 
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/jsmarenco/is-live.git
-   cd is-live
-   ```
-
+1. Clone the repository.
 2. Install dependencies:
 
    ```bash
    bun install
    ```
 
-3. Create a `.env` file in the project root with your Telegram bot token:
+3. Create a .env file with the following variables:
 
-   ```bash
-   TELEGRAM_TOKEN_BOT=your_bot_token_here
-   ```
-
-4. Run the bot:
-
-   ```bash
-   bun run dev
+   ```env
+   TELEGRAM_BOT_TOKEN=your_token_here
+   SOCKET_URL=your_socket_url
+   SOCKET_API_KEY=your_socket_api_key
+   DB_PATH=subscriptions.db
    ```
 
 ## Usage
 
-- Start a chat with your bot on Telegram.
-- Subscribe to a token by sending the command:
+Start the bot:
 
-  ```
-  /notify <token_address>
-  ```
-
-  Example:
-
-  ```
-  /notify 9xKQ4L3pump
-  ```
-
-  The bot will confirm your subscription and notify you once the token goes live.
-
-## Project Structure
-
-```
-.
-├── tokens/
-│   └── db.json          # Local storage for token subscriptions
-├── index.ts             # Main bot logic
-├── package.json
-└── README.md
+```bash
+bun run index.ts
 ```
 
-## How It Works
+### Commands
 
-1. Users send `/notify <token>` to the bot.
-2. The bot retrieves token data from the Pump.fun API.
-3. User subscriptions are saved in `tokens/db.json`.
-4. Every minute, the bot checks if any subscribed token is live.
-5. If a token goes live, the bot sends a notification to all subscribers.
+- /setup <tokenAddress> - Subscribe to a token to receive live stream and market cap notifications.
+- /help - Show available commands.
 
-## Notes
+## Database
 
-- Token data is fetched from the Pump.fun public API endpoint:
-
-  ```
-  https://frontend-api-v3.pump.fun/coins/<token_address>
-  ```
-
-- The JSON database is stored locally in the `tokens` folder.
-
-## License
-
-MIT License
+The bot uses SQLite to store:
+- Subscriptions (chat_id, token_address)
+- Pinned messages
+- Market cap alerts
+- Token market cap history
