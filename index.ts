@@ -6,7 +6,7 @@ const { io } = require('socket.io-client');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SOCKET_URL = process.env.SOCKET_URL;
-const SOCKET_API_KEY = process.env.SOCKET_API_KEY 
+const SOCKET_API_KEY = process.env.SOCKET_API_KEY
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'subscriptions.db');
 
 if (!TELEGRAM_BOT_TOKEN) {
@@ -26,6 +26,7 @@ db.prepare(
     )`
 ).run();
 
+
 db.prepare(
     `CREATE TABLE IF NOT EXISTS pinned_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,8 +38,54 @@ db.prepare(
     )`
 ).run();
 
+db.prepare(
+    `CREATE TABLE IF NOT EXISTS marketcap_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        token_address TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        type TEXT NOT NULL, //threshold or amount
+        threshold INTEGER NOT NULL,
+        amount INTEGER NOT NULL, 
+        direction TEXT NOT NULL, //up or down
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, token_address)
+    )`
+).run();
+
+db.prepare(
+    `CREATE TABLE IF NOT EXISTS token_mc (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_address TEXT NOT NULL,
+        market_cap_usd REAL DEFAULT 0
+        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`
+).run();
+
+const insertTokenMC = db.prepare(
+    'INSERT OR REPLACE INTO token_mc (token_address, market_cap_usd, last_updated) VALUES (?, ?, CURRENT_TIMESTAMP)'
+);
+
+const updateTokenMC = db.prepare(
+    'UPDATE token_mc SET market_cap_usd = ?, last_updated = CURRENT_TIMESTAMP WHERE token_address = ?'
+);
+
+const findTokenMC = db.prepare(
+    'SELECT market_cap_usd FROM token_mc WHERE token_address = ?'
+);
+
+const insertMarketCapAlert = db.prepare(
+    'INSERT OR IGNORE INTO marketcap_alerts (chat_id, token_address, message_id, type, threshold, amount, direction) VALUES (?, ?, ?, ?, ?, ?, ?)'
+);
+const deleteMarketCapAlert = db.prepare(
+    'DELETE FROM marketcap_alerts WHERE chat_id = ? AND token_address = ? AND type = ?'
+);
 const insertSubscription = db.prepare(
-    'INSERT OR IGNORE INTO subscriptions (chat_id, token_address) VALUES (?, ?)' 
+    'INSERT OR IGNORE INTO subscriptions (chat_id, token_address) VALUES (?, ?)'
+);
+
+const findChatsByMarketCapAlert = db.prepare(
+    'SELECT chat_id, message_id, type, threshold, amount, direction FROM marketcap_alerts WHERE token_address = ?'
 );
 const findChatsByToken = db.prepare(
     'SELECT DISTINCT chat_id FROM subscriptions WHERE token_address = ?'
@@ -71,7 +118,7 @@ const formatStreamLabel = (stream) => {
 
 const formatLiveMessage = (stream) => {
     const title = stream.livestream_title ? `\n\n🎬 ${stream.livestream_title}` : '';
-    const viewers = typeof stream.viewers === 'number' ? `\n👀 Viewers: ${stream.viewers} \n💰Market Cap: ${stream.market_cap_usd}\n👤Holders: ${stream.holders}`  : '';
+    const viewers = typeof stream.viewers === 'number' ? `\n👀 Viewers: ${stream.viewers} \n💰Market Cap: ${stream.market_cap_usd}\n👤Holders: ${stream.holders}` : '';
     return `🟢 ${formatStreamLabel(stream)} is LIVE!${title}${viewers}🚀`;
 };
 
@@ -87,6 +134,10 @@ const fetchCoinData = async (mint) => {
         console.error('Failed to fetch coin data:', error);
         return null;
     }
+}
+
+const formatMarketcapMessage = (stream) => {
+    return `📈 ${formatStreamLabel(stream)} market cap updated: $${stream.market_cap_usd.toLocaleString()}`;
 }
 
 const formatOfflineMessage = (stream) => `🔴 ${formatStreamLabel(stream)} went offline.`;
@@ -178,13 +229,13 @@ bot.onText(/^\/setup(?:@[\w_]+)?\s+(\S+)/i, async (msg, match) => {
 //     bot.sendMessage(chatId, listSubscriptionsForChat(chatId));
 // });
 
-// bot.onText(/^\/help(?:@[\w_]+)?$/, (msg) => {
-//     const helpText =
-//         'PumpMod Livestream Bot commands:\n' +
-//         '/setup <tokenAddress> - Subscribe to a token\n' 
-//         // '/list - Show your current subscriptions';
-//     bot.sendMessage(msg.chat.id, helpText);
-// });
+bot.onText(/^\/help(?:@[\w_]+)?$/, (msg) => {
+    const helpText =
+        '$ITSLIVE Livestream Bot commands:\n' +
+        '/setup <tokenAddress> - Subscribe to a token\n'
+    // '/list - Show your current subscriptions';
+    bot.sendMessage(msg.chat.id, helpText);
+});
 
 const socket = io(SOCKET_URL, {
     transports: ['websocket'],
@@ -214,6 +265,61 @@ socket.on('nowLive', async (stream) => {
     }
     await notifyChatsStreamLive(chats, stream);
 });
+
+
+socket.on('market_cap_update', async (stream) => {
+    const newMC = stream.market_cap_usd;
+    if (!stream?.mint) {
+        return;
+    }
+    const oldMCrow = findTokenMC.get(stream.mint);
+    const oldMC = oldMCrow ? oldMCrow.market_cap_usd : 0;
+    insertTokenMC.run(stream.mint, stream.market_cap_usd);
+    updateTokenMC.run(stream.market_cap_usd, stream.mint);
+    const isUp = newMC > oldMC;
+    const mcChange = Math.abs(newMC - oldMC);
+    const percentChange = oldMC === 0 ? 100 : (mcChange / oldMC) * 100;
+
+    const chats = findChatsByMarketCapAlert.all(stream.mint);
+    if (!chats.length) {
+        return;
+    }
+    const options = buildPumpFunButton(stream.mint);
+    for (const row of chats) {
+        try {
+            const { chat_id, message_id, type, threshold, amount, direction } = row;
+            let shouldNotify = false;
+            if (type === 'threshold') {
+                if (isUp && direction === 'up' && percentChange >= threshold) {
+                    shouldNotify = true;
+                } else if (!isUp && direction === 'down' && percentChange >= threshold) {
+                    shouldNotify = true;
+                }
+
+            } else if (type === 'amount') {
+                if (mcChange >= amount) {
+                    if (direction === 'up' && isUp) {
+                        shouldNotify = true;
+                    } else if (direction === 'down' && !isUp) {
+                        shouldNotify = true;
+                    }
+                }
+            }
+            if (shouldNotify) {
+                await bot.editMessageText(formatMarketcapMessage(stream, percentChange, isUp, amount), {
+                    chat_id: pinned.chat_id,
+                    message_id: pinned.message_id,
+                    ...options,
+                });
+            }
+
+        } catch (error) {
+            console.warn(`Failed to update message in chat ${row.chat_id}`, error.message);
+
+        }
+    }
+});
+
 
 
 socket.on('streamOffline', async (stream) => {
