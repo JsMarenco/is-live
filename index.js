@@ -52,15 +52,38 @@ const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
 
 // Register commands
-bot.onText(setupCommand.regex, (msg, match) =>
+bot.onText(setupCommand.regex, (msg, match) => {
   setupCommand.handler(bot, msg, match)
-);
+})
+
 bot.onText(notifyCommand.regex, (msg, match) =>
   notifyCommand.handler(bot, msg, match)
 );
 bot.onText(helpCommand.regex, (msg, match) =>
   helpCommand.handler(bot, msg, match)
 );
+
+// Handle reply messages (for notify command)
+bot.on("message", (msg) => {
+  console.log("Message received:", msg.text, "Is reply:", !!msg.reply_to_message);
+
+  // Skip if it's a command
+  if (msg.text?.startsWith("/")) {
+    return;
+  }
+
+  // Check if this is a reply to our notify prompts
+  if (msg.reply_to_message) {
+    const replyText = msg.reply_to_message.text;
+    console.log("Reply to message:", replyText);
+
+    if (replyText?.includes("enter a token address") ||
+      replyText?.includes("Enter token address")) {
+      console.log("Handling notify reply response:", msg.text);
+      notifyCommand.handleReply(bot, msg);
+    }
+  }
+});
 
 // Answer callback query
 bot.on("callback_query", (callbackQuery) =>

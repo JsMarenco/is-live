@@ -48,6 +48,19 @@ const buildPumpFunButton = (mint) => ({
     },
 });
 
+const formatTokenDisplay = async (tokenAddress) => {
+    const coinData = await fetchCoinData(tokenAddress);
+
+    if (coinData && (coinData.name || coinData.symbol)) {
+        const name = coinData.name || coinData.symbol;
+        const symbol = coinData.symbol ? `(${coinData.symbol})` : "";
+        return `${name} ${symbol}`.trim();
+    }
+
+    // Fallback to shortened address if no data
+    return `${tokenAddress.substring(0, 4)}...${tokenAddress.substring(tokenAddress.length - 4)}`;
+};
+
 module.exports = {
     normalizeMint,
     isValidMint,
@@ -57,4 +70,5 @@ module.exports = {
     formatMarketcapMessage,
     formatOfflineMessage,
     buildPumpFunButton,
+    formatTokenDisplay,
 };

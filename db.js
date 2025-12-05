@@ -96,6 +96,10 @@ const deletePinnedMessage = db.prepare(
     "DELETE FROM pinned_messages WHERE chat_id = ? AND token_address = ?"
 );
 
+const findAlertsByChat = db.prepare(
+    "SELECT token_address, type, threshold, direction FROM marketcap_alerts WHERE chat_id = ?"
+);
+
 module.exports = {
     db,
     insertTokenMC,
@@ -110,4 +114,5 @@ module.exports = {
     upsertPinnedMessage,
     findPinnedMessagesByToken,
     deletePinnedMessage,
+    findAlertsByChat,
 };
