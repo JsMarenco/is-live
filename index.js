@@ -21,10 +21,11 @@ db.prepare(
         chat_id TEXT NOT NULL,
         token_address TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(chat_id, token_address),
-        market_cap_usd REAL DEFAULT 0
+        market_cap_usd INTEGER DEFAULT 0,   
+        UNIQUE(chat_id, token_address)
     )`
 ).run();
+
 
 db.prepare(
     `CREATE TABLE IF NOT EXISTS pinned_messages (
@@ -43,10 +44,10 @@ db.prepare(
         chat_id TEXT NOT NULL,
         token_address TEXT NOT NULL,
         message_id INTEGER NOT NULL,
-        type TEXT NOT NULL, //threshold or amount
+        type TEXT NOT NULL, 
         threshold INTEGER NOT NULL,
         amount INTEGER NOT NULL, 
-        direction TEXT NOT NULL, //up or down
+        direction TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(chat_id, token_address)
     )`
@@ -56,7 +57,7 @@ db.prepare(
     `CREATE TABLE IF NOT EXISTS token_mc (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         token_address TEXT NOT NULL,
-        market_cap_usd REAL DEFAULT 0
+        market_cap_usd INTEGER DEFAULT 0,
         last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
         )`
 ).run();
