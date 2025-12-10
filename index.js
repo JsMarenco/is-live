@@ -29,6 +29,7 @@ const { startSocketService } = require("./socket");
 const setupCommand = require("./commands/setup");
 const notifyCommand = require("./commands/notify");
 const helpCommand = require("./commands/help");
+const caCommand = require("./commands/ca");
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -43,12 +44,12 @@ bot.onText(setupCommand.regex, (msg, match) => {
   setupCommand.handler(bot, msg, match)
 })
 
-bot.onText(notifyCommand.regex, (msg, match) =>
-  notifyCommand.handler(bot, msg, match)
-);
-
 bot.onText(helpCommand.regex, (msg, match) =>
   helpCommand.handler(bot, msg, match)
+);
+
+bot.onText(caCommand.regex, (msg, match) =>
+  caCommand.handler(bot, msg, match)
 );
 
 bot.on("message", (msg) => {

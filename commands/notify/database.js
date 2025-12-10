@@ -1,8 +1,12 @@
+const { Connection, PublicKey } = require("@solana/web3.js");
+const {
+    getMint,
+    TOKEN_2022_PROGRAM_ID
+} = require("@solana/spl-token");
 /**
  * Database operations for market cap alerts
  * Centralizes all database interactions for the notify command
  */
-
 const { insertMarketCapAlert, findAlertsByChat, deleteMarketCapAlert, findTokensByChat } = require("../../db");
 
 /**
@@ -67,7 +71,6 @@ const createAlert = (chatId, tokenAddress, messageId, direction, threshold = 10)
 const updateAlert = (chatId, tokenAddress, messageId, newDirection, threshold = 10) => {
     // Delete old alert
     deleteMarketCapAlert.run(String(chatId), tokenAddress, "threshold");
-
     // Create new alert with updated direction
     return createAlert(chatId, tokenAddress, messageId, newDirection, threshold);
 };
