@@ -1,30 +1,9 @@
 require("dotenv").config();
-const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
 const {
   db,
-  insertTokenMC,
-  updateTokenMC,
-  findTokenMC,
-  insertMarketCapAlert,
-  deleteMarketCapAlert,
-  insertSubscription,
-  findChatsByMarketCapAlert,
-  findChatsByToken,
-  findTokensByChat,
-  upsertPinnedMessage,
-  findPinnedMessagesByToken,
-  deletePinnedMessage,
 } = require("./db");
-const {
-  normalizeMint,
-  isValidMint,
-  formatLiveMessage,
-  fetchCoinData,
-  formatMarketcapMessage,
-  formatOfflineMessage,
-  buildPumpFunButton,
-} = require("./utils");
+require("./utils");
 const { startSocketService } = require("./socket");
 const setupCommand = require("./commands/setup");
 const notifyCommand = require("./commands/notify");
