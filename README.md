@@ -1,4 +1,5 @@
 # $ITSLIVE
+## CA: 9jhRJYAPw1duTaU5yj4Z2zJm2BUpNQLUYEn4uktppump
 
 A Telegram bot that provides real-time notifications for PumpFun livestreams and market cap updates.
 
