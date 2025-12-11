@@ -31,6 +31,10 @@ bot.onText(caCommand.regex, (msg, match) =>
   caCommand.handler(bot, msg, match)
 );
 
+bot.onText(notifyCommand.regex, (msg, match) =>
+  notifyCommand.handler(bot, msg, match)
+);
+
 bot.on("message", (msg) => {
   if (msg.text?.startsWith("/")) {
     return;
